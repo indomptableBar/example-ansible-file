@@ -3,12 +3,12 @@ Ce projet a pour objectif de simplifier et fiabiliser l'installation d'une appli
 
 Comment le lancer :
 
- eval "$(ssh-agent -s)"
- ssh-add ~/.ssh/id_ed25519
+    eval "$(ssh-agent -s)"
+    ssh-add ~/.ssh/id_ed25519
 
- ansible -i inventory.ini serveurs -m ping
+    ansible -i inventory.ini serveurs -m ping
 
- ansible-playbook -i inventory.ini install.yml
+    ansible-playbook -i inventory.ini install.yml
 
 
 
