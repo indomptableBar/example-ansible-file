@@ -1,0 +1,280 @@
+---
+- name: Installation de file.zip sur les serveurs Rocky Linux
+  hosts: serveurs
+  become: true
+  gather_facts: true
+
+  vars:
+    fichier_local: "files/file.zip"
+    fichier_distant: "/reception/file.zip"
+    script_installation: "/reception/install.sh"
+    service_name: "leservice.service"
+
+    seuil_critique: 95
+    seuil_transfert: 80
+
+    # Format demandé :
+    # hh-mm-ss-date-jj-mm-aa.txt
+    log_file: "/reception/{{ ansible_date_time.time | regex_replace(':', '-') }}-date-{{ ansible_date_time.date | regex_replace('-', '-') | regex_replace('^([0-9]{4})-([0-9]{2})-([0-9]{2})$', '\\3-\\2-\\1') }}.txt"
+
+  pre_tasks:
+
+    - name: Vérifier que le système est Rocky Linux
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Rocky"
+        fail_msg: >
+          Ce playbook est prévu pour Rocky Linux.
+          Système détecté : {{ ansible_distribution }}
+        success_msg: "Rocky Linux détecté."
+
+    - name: Vérifier que /reception existe
+      ansible.builtin.stat:
+        path: /reception
+      register: reception_dir
+
+    - name: Arrêter le playbook si /reception n'existe pas
+      ansible.builtin.fail:
+        msg: >
+          Le répertoire /reception n'existe pas sur {{ inventory_hostname }}.
+      when:
+        - not reception_dir.stat.exists or not reception_dir.stat.isdir
+
+    - name: Vérifier l'espace disque de /reception
+      ansible.builtin.command:
+        cmd: df -P /reception
+      register: reception_df
+      changed_when: false
+
+    - name: Vérifier l'espace disque de /var
+      ansible.builtin.command:
+        cmd: df -P /var
+      register: var_df
+      changed_when: false
+
+    - name: Calculer le pourcentage utilisé de /reception
+      ansible.builtin.set_fact:
+        reception_usage: >-
+          {{
+            reception_df.stdout_lines[1].split()[4]
+            | regex_replace('%', '')
+            | int
+          }}
+
+    - name: Calculer le pourcentage utilisé de /var
+      ansible.builtin.set_fact:
+        var_usage: >-
+          {{
+            var_df.stdout_lines[1].split()[4]
+            | regex_replace('%', '')
+            | int
+          }}
+
+    - name: Afficher l'état des espaces disque
+      ansible.builtin.debug:
+        msg:
+          - "Serveur : {{ inventory_hostname }}"
+          - "/reception utilisé à : {{ reception_usage }}%"
+          - "/var utilisé à : {{ var_usage }}%"
+          - "Seuil critique : {{ seuil_critique }}%"
+          - "Seuil de transfert : {{ seuil_transfert }}%"
+
+    # ---------------------------------------------------------------
+    # VERIFICATION CRITIQUE > 95 %
+    # ---------------------------------------------------------------
+
+    - name: STOP - /reception dépasse 95 %
+      ansible.builtin.fail:
+        msg: >
+          ATTENTION : il vous manque de la place pour accueillir
+          le fichier file.zip.
+          /reception est utilisé à {{ reception_usage }}%.
+          Le playbook est arrêté sur {{ inventory_hostname }}.
+      when: reception_usage > seuil_critique
+
+    - name: STOP - /var dépasse 95 %
+      ansible.builtin.fail:
+        msg: >
+          ATTENTION : il vous manque de la place pour accueillir
+          le fichier file.zip.
+          /var est utilisé à {{ var_usage }}%.
+          Le playbook est arrêté sur {{ inventory_hostname }}.
+      when: var_usage > seuil_critique
+
+    # ---------------------------------------------------------------
+    # VERIFICATION DU SEUIL DE TRANSFERT
+    # ---------------------------------------------------------------
+
+    - name: STOP - /reception dépasse 80 %
+      ansible.builtin.fail:
+        msg: >
+          Installation annulée sur {{ inventory_hostname }}.
+          /reception est utilisé à {{ reception_usage }}%.
+          Le seuil autorisé pour le transfert de file.zip est de
+          {{ seuil_transfert }}%.
+      when: reception_usage > seuil_transfert
+
+    - name: STOP - /var dépasse 80 %
+      ansible.builtin.fail:
+        msg: >
+          Installation annulée sur {{ inventory_hostname }}.
+          /var est utilisé à {{ var_usage }}%.
+          Le seuil autorisé pour le transfert de file.zip est de
+          {{ seuil_transfert }}%.
+      when: var_usage > seuil_transfert
+
+    # ---------------------------------------------------------------
+    # PREPARATION
+    # ---------------------------------------------------------------
+
+    - name: Installer unzip sur Rocky Linux
+      ansible.builtin.dnf:
+        name: unzip
+        state: present
+        update_cache: true
+
+    - name: Vérifier que file.zip existe sur la machine Ansible
+      ansible.builtin.stat:
+        path: "{{ fichier_local }}"
+      delegate_to: localhost
+      become: false
+      register: fichier_local_stat
+
+    - name: Arrêter si file.zip est absent
+      ansible.builtin.fail:
+        msg: >
+          Le fichier {{ fichier_local }} est introuvable sur la machine
+          Ansible.
+      when: not fichier_local_stat.stat.exists
+
+    # ---------------------------------------------------------------
+    # TRANSFERT
+    # ---------------------------------------------------------------
+
+    - name: Copier file.zip vers /reception
+      ansible.builtin.copy:
+        src: "{{ fichier_local }}"
+        dest: "{{ fichier_distant }}"
+        owner: root
+        group: root
+        mode: "0644"
+      register: transfert_zip
+
+    - name: Afficher le résultat du transfert
+      ansible.builtin.debug:
+        msg: >
+          file.zip a été transféré sur {{ inventory_hostname }}
+          dans {{ fichier_distant }}.
+
+    # ---------------------------------------------------------------
+    # DECOMPRESSION
+    # ---------------------------------------------------------------
+
+    - name: Décompresser file.zip dans /reception
+      ansible.builtin.unarchive:
+        src: "{{ fichier_distant }}"
+        dest: /reception
+        remote_src: true
+        owner: root
+        group: root
+      register: decompression
+
+    - name: Vérifier que le script d'installation existe
+      ansible.builtin.stat:
+        path: "{{ script_installation }}"
+      register: script_install_stat
+
+    - name: Arrêter si le script d'installation est absent
+      ansible.builtin.fail:
+        msg: >
+          Le script {{ script_installation }} n'existe pas après
+          décompression de file.zip.
+      when: not script_install_stat.stat.exists
+
+    - name: Rendre le script d'installation exécutable
+      ansible.builtin.file:
+        path: "{{ script_installation }}"
+        mode: "0755"
+
+    # ---------------------------------------------------------------
+    # ARRET DU SERVICE
+    # ---------------------------------------------------------------
+
+    - name: Arrêter leservice.service
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        state: stopped
+      register: service_stop
+
+    # ---------------------------------------------------------------
+    # INSTALLATION + LOG
+    # ---------------------------------------------------------------
+
+    - name: Lancer le script d'installation et récupérer les logs
+      ansible.builtin.shell: |
+        set -o pipefail
+        "{{ script_installation }}" 2>&1 | tee "{{ log_file }}"
+        exit "${PIPESTATUS[0]}"
+      args:
+        executable: /bin/bash
+      register: installation_result
+      failed_when: false
+      changed_when: true
+
+    # ---------------------------------------------------------------
+    # ANALYSE DES LOGS
+    # ---------------------------------------------------------------
+
+    - name: Rechercher ERR / ERROR / ERREUR dans les logs
+      ansible.builtin.shell: |
+        grep -Ein 'err|error|erreur' "{{ log_file }}" || true
+      args:
+        executable: /bin/bash
+      register: erreurs_logs
+      changed_when: false
+
+    - name: Afficher les erreurs trouvées dans les logs
+      ansible.builtin.debug:
+        msg:
+          - "Des erreurs ont été trouvées dans {{ log_file }}"
+          - "{{ erreurs_logs.stdout }}"
+      when: erreurs_logs.stdout | length > 0
+
+    # ---------------------------------------------------------------
+    # REDEMARRAGE DU SERVICE
+    # ---------------------------------------------------------------
+
+    - name: Redémarrer leservice.service
+      ansible.builtin.systemd:
+        name: "{{ service_name }}"
+        state: started
+        enabled: true
+        daemon_reload: true
+      register: service_restart
+
+    # ---------------------------------------------------------------
+    # RESULTAT FINAL
+    # ---------------------------------------------------------------
+
+    - name: Installation réussie
+      ansible.builtin.debug:
+        msg:
+          - "=================================================="
+          - "Votre installation s'est effectuée avec succes"
+          - "Serveur : {{ inventory_hostname }}"
+          - "Log : {{ log_file }}"
+          - "=================================================="
+      when:
+        - installation_result.rc == 0
+        - erreurs_logs.stdout | length == 0
+
+    - name: Installation en erreur
+      ansible.builtin.fail:
+        msg:
+          - "=================================================="
+          - "ERREUR : l'installation a échoué sur {{ inventory_hostname }}"
+          - "Code retour du script : {{ installation_result.rc }}"
+          - "Consultez le fichier de log : {{ log_file }}"
+          - "=================================================="
+      when:
+        - installation_result.rc != 0 or erreurs_logs.stdout | length > 0
