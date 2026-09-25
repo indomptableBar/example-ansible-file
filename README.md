@@ -154,7 +154,8 @@ Archive contenant les fichiers nécessaires à l'installation de l'application.
 files/
 └── file.zip
 
-    💡 Pour des fichiers volumineux ou des applications distribuées à grande échelle, il peut être préférable d'utiliser un dépôt d'artefacts plutôt que de versionner directement l'archive dans Git.
+    💡 Pour des fichiers volumineux ou des applications distribuées à grande échelle, 
+    il peut être préférable d'utiliser un dépôt d'artefacts plutôt que de versionner directement l'archive dans Git.
 
 ⚙️ Fonctionnement
 1. Connexion SSH
