@@ -1,6 +1,17 @@
 
 Ce projet a pour objectif de simplifier et fiabiliser l'installation d'une application sur plusieurs serveurs Rocky Linux.
 
+Comment le lancer :
+
+ eval "$(ssh-agent -s)"
+ ssh-add ~/.ssh/id_ed25519
+
+ ansible -i inventory.ini serveurs -m ping
+
+ ansible-playbook -i inventory.ini install.yml
+
+
+
 L'automatisation prend notamment en charge :
 
     🔐 Connexion aux serveurs via SSH
